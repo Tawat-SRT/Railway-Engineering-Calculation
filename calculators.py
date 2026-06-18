@@ -20,6 +20,96 @@ RAIL_PROPERTIES = {
 }
 
 
+def string_lining_calculation(
+    original_versines: list[float],
+    revised_versines: list[float],
+    baseline_offset_mm: float = 500,
+) -> dict:
+    """Calculate string-lining throws using the cumulative summation method in the workbook.
+
+    Columns follow the source workbook:
+    difference = original - revised
+    cumulative difference = previous cumulative + difference
+    half throw = previous half throw + previous cumulative difference
+    throw = 2 * half throw
+    rail-to-centre = baseline - throw
+    """
+    if len(original_versines) != len(revised_versines):
+        raise ValueError("Original and revised versine lists must have equal length")
+    if not original_versines:
+        raise ValueError("At least one station is required")
+
+    rows = []
+    previous_cumulative = 0.0
+    previous_half_throw = 0.0
+    for index, (original, revised) in enumerate(zip(original_versines, revised_versines), start=1):
+        original = float(original)
+        revised = float(revised)
+        difference = original - revised
+        cumulative = previous_cumulative + difference
+        half_throw = previous_half_throw + previous_cumulative
+        throw = 2 * half_throw
+        rows.append(
+            {
+                "station": index,
+                "original_versine_mm": original,
+                "revised_versine_mm": revised,
+                "difference_mm": difference,
+                "cumulative_difference_mm": cumulative,
+                "half_throw_mm": half_throw,
+                "throw_mm": throw,
+                "rail_to_centre_mm": baseline_offset_mm - throw,
+            }
+        )
+        previous_cumulative = cumulative
+        previous_half_throw = half_throw
+
+    sum_original = sum(float(v) for v in original_versines)
+    sum_revised = sum(float(v) for v in revised_versines)
+    max_abs_throw = max(abs(row["throw_mm"]) for row in rows)
+    return {
+        "rows": rows,
+        "sum_original_mm": sum_original,
+        "sum_revised_mm": sum_revised,
+        "sum_difference_mm": sum_original - sum_revised,
+        "final_cumulative_difference_mm": rows[-1]["cumulative_difference_mm"],
+        "final_half_throw_mm": rows[-1]["half_throw_mm"],
+        "max_abs_throw_mm": max_abs_throw,
+        "sum_balanced": abs(sum_original - sum_revised) < 1e-9,
+        "cumulative_closed": abs(rows[-1]["cumulative_difference_mm"]) < 1e-9,
+        "throw_closed": abs(rows[-1]["half_throw_mm"]) < 1e-9,
+        "end_versines_zero": abs(float(revised_versines[0])) < 1e-9
+        and abs(float(revised_versines[-1])) < 1e-9,
+        "throw_within_working_range": max_abs_throw <= 120,
+        "throw_within_document_limit": max_abs_throw <= 200,
+    }
+
+
+def theoretical_versine_profile(
+    straight_before_pins: int,
+    entry_transition_pins: int,
+    circular_pins: int,
+    exit_transition_pins: int,
+    straight_after_pins: int,
+    maximum_versine_mm: float,
+) -> list[float]:
+    """Create a rounded arithmetic-progression profile as an editable starting point."""
+    profile = [0.0] * max(straight_before_pins, 0)
+    if entry_transition_pins > 0:
+        profile.extend(
+            round(maximum_versine_mm * i / entry_transition_pins)
+            for i in range(1, entry_transition_pins + 1)
+        )
+    profile.extend([round(maximum_versine_mm)] * max(circular_pins, 0))
+    if exit_transition_pins > 0:
+        profile.extend(
+            round(maximum_versine_mm * (exit_transition_pins - i) / exit_transition_pins)
+            for i in range(1, exit_transition_pins + 1)
+        )
+    profile.extend([0.0] * max(straight_after_pins, 0))
+    return [float(v) for v in profile]
+
+
 def round_to(value: float, increment: float = 5.0) -> float:
     return round(value / increment) * increment
 
