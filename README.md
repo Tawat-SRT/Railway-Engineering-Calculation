@@ -1,2 +1,27 @@
-# Railway-Engineering-Calculation
-Railway Engineering Calculator
+# SRT Railway Engineering Calculator
+
+เว็บแอป Streamlit สำหรับคำนวณงานทางรถไฟ แปลงสูตรหลักจากไฟล์ Excel “รวมรายการคำนวณ ทางรถไฟ (วศธ.ทส.)” เป็นเครื่องมือแยกหมวด
+
+## เครื่องมือพร้อมใช้
+
+- ค่ายกโค้งและช่วงความเร็ว
+- ความเร็วผ่านประแจ
+- ออกแบบรางระบายน้ำด้วย Rational + Manning
+- วิเคราะห์ราง–หมอน–หินโรยทาง
+- เรขาคณิตประแจ
+- โค้งต่อและโค้งกลม
+- การขยายขนาดทาง
+- ส่งออกผลคำนวณแต่ละรายการเป็น Excel
+
+## วิธีรัน
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+## Deploy บน Streamlit Community Cloud
+
+อัปโหลดโฟลเดอร์นี้ขึ้น GitHub แล้วเลือก `app.py` เป็น Main file path ระบบจะติดตั้งแพ็กเกจจาก `requirements.txt` อัตโนมัติ
+
+> ผลคำนวณต้องผ่านการตรวจทานโดยวิศวกรผู้รับผิดชอบและใช้ร่วมกับมาตรฐาน/แบบฉบับปัจจุบัน
