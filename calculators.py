@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from math import atan, cos, exp, floor, pi, radians, sin, sqrt, tan
 
+import numpy as np
+
 
 RAIL_PROPERTIES = {
     "50 RSR": {"I": 550.30, "Z": 98.30, "area": 3203.00, "mass": 24.80},
@@ -108,6 +110,74 @@ def theoretical_versine_profile(
         )
     profile.extend([0.0] * max(straight_after_pins, 0))
     return [float(v) for v in profile]
+
+
+def improve_string_lining_versines(
+    original_versines: list[float],
+    current_revised_versines: list[float],
+    maximum_throw_mm: float = 120,
+) -> dict:
+    """Improve revised versines while enforcing the two string-lining closure equations.
+
+    The solution is the smallest least-squares correction to the current revised
+    profile. If its throw exceeds the selected working limit, the profile is
+    progressively blended toward the measured versines and projected again.
+    End versines are fixed at zero throughout.
+    """
+    old = np.asarray(original_versines, dtype=float)
+    current = np.asarray(current_revised_versines, dtype=float)
+    if old.shape != current.shape or old.ndim != 1:
+        raise ValueError("Original and revised versines must be equal one-dimensional lists")
+    if len(old) < 4:
+        raise ValueError("At least four stations are required for automatic improvement")
+
+    n = len(old)
+    weights = np.arange(n - 1, -1, -1, dtype=float)
+    interior = np.arange(1, n - 1)
+    a = np.vstack([np.ones(len(interior)), weights[interior]])
+    b = np.array([old.sum(), np.dot(weights, old)], dtype=float)
+    gram_inverse = np.linalg.pinv(a @ a.T)
+
+    def project(base: np.ndarray) -> np.ndarray:
+        candidate = base.copy()
+        candidate[0] = 0.0
+        candidate[-1] = 0.0
+        x = candidate[interior]
+        x = x + a.T @ gram_inverse @ (b - a @ x)
+        candidate[interior] = x
+        return candidate
+
+    # A low-throw closure reference: retain measured versines except for the
+    # two stations next to the ends, which absorb the endpoint corrections.
+    closure_difference = np.zeros(n, dtype=float)
+    closure_difference[0] = old[0]
+    closure_difference[-1] = old[-1]
+    closure_difference[1] = (old[-1] - (n - 2) * old[0]) / (n - 3)
+    closure_difference[-2] = -(old[0] + old[-1]) - closure_difference[1]
+    closure_reference = old - closure_difference
+
+    selected = project(current)
+    blend_used = 0.0
+    selected_result = string_lining_calculation(old.tolist(), selected.tolist())
+    if selected_result["max_abs_throw_mm"] > maximum_throw_mm:
+        for blend in np.linspace(0.01, 1.0, 100):
+            base = (1 - blend) * current + blend * closure_reference
+            candidate = project(base)
+            candidate_result = string_lining_calculation(old.tolist(), candidate.tolist())
+            selected = candidate
+            selected_result = candidate_result
+            blend_used = float(blend)
+            if candidate_result["max_abs_throw_mm"] <= maximum_throw_mm:
+                break
+
+    selected[np.abs(selected) < 1e-10] = 0.0
+    return {
+        "revised_versines": selected.tolist(),
+        "blend_used": blend_used,
+        "maximum_throw_mm": selected_result["max_abs_throw_mm"],
+        "sum_closed": selected_result["sum_balanced"],
+        "moment_closed": selected_result["throw_closed"],
+    }
 
 
 def round_to(value: float, increment: float = 5.0) -> float:
