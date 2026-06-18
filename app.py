@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from io import BytesIO
 from math import ceil
 
@@ -12,6 +13,7 @@ from calculators import (
     RAIL_PROPERTIES,
     cant_calculation,
     drainage_design,
+    improve_string_lining_versines,
     sleeper_track_analysis,
     string_lining_calculation,
     theoretical_versine_profile,
@@ -89,6 +91,33 @@ def result_status(label: str, ok: bool, detail: str) -> None:
     st.markdown(f"**{label}** — <span class='{cls}'>{text}</span> · {detail}", unsafe_allow_html=True)
 
 
+def string_lining_curve_diagram(direction: str = "โค้งขวา") -> None:
+    mirror = "translate(900 0) scale(-1 1)" if direction == "โค้งซ้าย" else ""
+    st.markdown(
+        f"""
+<svg viewBox="0 0 900 260" role="img" aria-label="แผนภาพโค้งทางรถไฟแสดงจุด TS SC CS ST" style="width:100%;height:auto;background:#f5f2eb;border:1px solid #ded9cf;border-radius:8px">
+  <defs><filter id="shadow"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-opacity=".18"/></filter></defs>
+  <g transform="{mirror}">
+    <path d="M45 202 L150 202 C245 202 278 167 335 125 C415 66 505 66 585 125 C642 167 675 202 770 202 L855 202" fill="none" stroke="#0B2341" stroke-width="12" opacity=".16"/>
+    <path d="M45 194 L150 194 C245 194 278 159 335 117 C415 58 505 58 585 117 C642 159 675 194 770 194 L855 194" fill="none" stroke="#555" stroke-width="3"/>
+    <path d="M45 210 L150 210 C245 210 278 175 335 133 C415 74 505 74 585 133 C642 175 675 210 770 210 L855 210" fill="none" stroke="#555" stroke-width="3"/>
+    <path d="M45 202 L150 202 C245 202 278 167 335 125 C415 66 505 66 585 125 C642 167 675 202 770 202 L855 202" fill="none" stroke="#7A0019" stroke-width="2" stroke-dasharray="6 6"/>
+    <g fill="#7A0019" stroke="white" stroke-width="3" filter="url(#shadow)">
+      <circle cx="150" cy="202" r="8"/><circle cx="335" cy="125" r="8"/><circle cx="585" cy="125" r="8"/><circle cx="770" cy="202" r="8"/>
+    </g>
+  </g>
+  <g font-family="Noto Sans Thai, sans-serif" font-weight="700" fill="#0B2341" text-anchor="middle">
+    <text x="150" y="238">TS</text><text x="335" y="101">SC</text><text x="585" y="101">CS</text><text x="770" y="238">ST</text>
+  </g>
+  <g font-family="Noto Sans Thai, sans-serif" font-size="13" fill="#667085" text-anchor="middle">
+    <text x="242" y="232">โค้งต่อด้านต้น</text><text x="460" y="42">โค้งกลม</text><text x="678" y="232">โค้งต่อด้านปลาย</text>
+  </g>
+</svg>
+""",
+        unsafe_allow_html=True,
+    )
+
+
 def excel_download(title: str, inputs: dict, results: dict) -> None:
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -107,7 +136,7 @@ def excel_download(title: str, inputs: dict, results: dict) -> None:
     )
 
 
-def string_lining_excel_download(input_df: pd.DataFrame, result_df: pd.DataFrame, baseline: float) -> None:
+def string_lining_excel_download(input_df: pd.DataFrame, result_df: pd.DataFrame, baseline: float, metadata: dict) -> None:
     output = BytesIO()
     export = pd.DataFrame(
         {
@@ -119,55 +148,95 @@ def string_lining_excel_download(input_df: pd.DataFrame, result_df: pd.DataFrame
             "ครึ่งดัด (มม.)": result_df["ครึ่งดัด (มม.)"],
             "ระยะดัด (มม.)": result_df["ระยะดัด (มม.)"],
             "ราง-ศก. (มม.)": result_df["ราง-ศก. (มม.)"],
+            "ค่าขยายทาง (มม.)": input_df["ค่าขยายทาง (มม.)"],
+            "ค่ายกโค้ง (มม.)": input_df["ค่ายกโค้ง (มม.)"],
+            "เวอร์ไซน์มาตรฐาน (มม.)": input_df["เวอร์ไซน์มาตรฐาน (มม.)"],
+            "สทล. จุดที่": input_df["สทล. จุดที่"],
+            "ศก.ทาง": input_df["ศก.ทาง"],
+            "รางนอก": input_df["รางนอก"],
             "หมายเหตุ": input_df["หมายเหตุ"],
         }
     )
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        export.to_excel(writer, "String Lining", index=False)
+        export.to_excel(writer, "String Lining", index=False, startrow=8)
         ws = writer.book["String Lining"]
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = f"A1:I{len(export) + 1}"
-        ws["K1"] = "ข้อมูลควบคุม"
-        ws["K2"] = "ระยะฐานราง-ศก. (มม.)"
-        ws["L2"] = baseline
-        ws["K4"] = "สูตรจาก Excel ต้นฉบับ"
-        ws["K5"] = "D = B-C"
-        ws["K6"] = "E(i) = E(i-1)+D(i)"
-        ws["K7"] = "F(i) = F(i-1)+E(i-1)"
-        ws["K8"] = "G = 2F"
-        ws["K9"] = "H = Baseline-G"
-        for row in range(2, len(export) + 2):
+        ws.merge_cells("A1:O1")
+        ws["A1"] = "รายการคำนวณดัดโค้งด้วยเส้นเชือก (String Lining)"
+        ws["A1"].font = Font(size=16, bold=True, color="FFFFFF")
+        ws["A1"].fill = PatternFill("solid", fgColor="7A0019")
+        ws["A1"].alignment = Alignment(horizontal="center")
+        ws["A2"] = f'โค้งเลขที่ {metadata.get("curve_no", "")}  กม. {metadata.get("km_start", "")} - {metadata.get("km_end", "")}  {metadata.get("direction", "")}'
+        ws.merge_cells("A2:O2")
+        ws["A3"] = f'ตอนนายตรวจทาง {metadata.get("inspector_section", "")}  แขวง {metadata.get("division", "")}  กอง {metadata.get("office", "")}'
+        ws.merge_cells("A3:O3")
+        ws["A4"] = f'ความเร็ว {metadata.get("speed", "")} กม./ชม.  รัศมี {metadata.get("radius", "")} ม.  ความยาวโค้ง {metadata.get("curve_length", "")} ม.  ค่ายกโค้ง {metadata.get("cant", "")} มม.'
+        ws.merge_cells("A4:O4")
+        ws["A5"] = f'ผู้สำรวจ {metadata.get("surveyor", "")}  วันที่ {metadata.get("survey_date", "")}  ผู้คำนวณ {metadata.get("calculator", "")}  วันที่ {metadata.get("calculation_date", "")} '
+        ws.merge_cells("A5:O5")
+        ws["A6"] = f'ผู้ให้ ศก.หมุด {metadata.get("centre_setter", "")}  ผู้ดัดราง {metadata.get("lining_operator", "")} '
+        ws.merge_cells("A6:O6")
+        ws.merge_cells("B8:C8")
+        ws["B8"] = "เวอร์ไซน์ (มม.)"
+        ws.merge_cells("I8:K8")
+        ws["I8"] = "ค่ามาตรฐาน (มม.)"
+        ws.merge_cells("L8:N8")
+        ws["L8"] = "ข้อมูลศูนย์กลางทาง"
+        for cell in [ws["B8"], ws["I8"], ws["L8"]]:
+            cell.fill = PatternFill("solid", fgColor="D9E2F3")
+            cell.font = Font(bold=True, color="0B2341")
+            cell.alignment = Alignment(horizontal="center")
+        ws.freeze_panes = "A10"
+        ws.auto_filter.ref = f"A9:O{len(export) + 9}"
+        ws["Q1"] = "ข้อมูลควบคุม"
+        ws["Q2"] = "ระยะฐานราง-ศก. (มม.)"
+        ws["R2"] = baseline
+        ws["Q4"] = "สูตรจาก Excel ต้นฉบับ"
+        ws["Q5"] = "D = B-C"
+        ws["Q6"] = "E(i) = E(i-1)+D(i)"
+        ws["Q7"] = "F(i) = F(i-1)+E(i-1)"
+        ws["Q8"] = "G = 2F"
+        ws["Q9"] = "H = Baseline-G"
+        first_data_row = 10
+        last_data_row = len(export) + 9
+        for row in range(first_data_row, last_data_row + 1):
             ws[f"D{row}"] = f"=B{row}-C{row}"
-            ws[f"E{row}"] = f"=D{row}" if row == 2 else f"=E{row-1}+D{row}"
-            ws[f"F{row}"] = "=0" if row == 2 else f"=F{row-1}+E{row-1}"
+            ws[f"E{row}"] = f"=D{row}" if row == first_data_row else f"=E{row-1}+D{row}"
+            ws[f"F{row}"] = "=0" if row == first_data_row else f"=F{row-1}+E{row-1}"
             ws[f"G{row}"] = f"=2*F{row}"
-            ws[f"H{row}"] = f"=$L$2-G{row}"
+            ws[f"H{row}"] = f"=$R$2-G{row}"
+        total_row = last_data_row + 1
+        ws[f"A{total_row}"] = "รวม"
+        ws[f"B{total_row}"] = f"=SUM(B{first_data_row}:B{last_data_row})"
+        ws[f"C{total_row}"] = f"=SUM(C{first_data_row}:C{last_data_row})"
+        for cell in ws[total_row]:
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill("solid", fgColor="F5F0E6")
         header_fill = PatternFill("solid", fgColor="0B2341")
-        for cell in ws[1]:
+        for cell in ws[9]:
             cell.fill = header_fill
             cell.font = Font(color="FFFFFF", bold=True)
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        widths = [10, 20, 20, 16, 16, 16, 16, 16, 30]
-        for col, width in zip("ABCDEFGHI", widths):
+        widths = [9, 19, 19, 14, 14, 14, 14, 15, 17, 16, 22, 14, 12, 12, 28]
+        for col, width in zip("ABCDEFGHIJKLMNO", widths):
             ws.column_dimensions[col].width = width
         versine_chart = LineChart()
         versine_chart.title = "เวอร์ไซน์เดิมและเวอร์ไซน์ใหม่"
         versine_chart.y_axis.title = "เวอร์ไซน์ (มม.)"
         versine_chart.x_axis.title = "หมุดที่"
-        versine_chart.add_data(Reference(ws, min_col=2, max_col=3, min_row=1, max_row=len(export) + 1), titles_from_data=True)
-        versine_chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=len(export) + 1))
+        versine_chart.add_data(Reference(ws, min_col=2, max_col=3, min_row=9, max_row=last_data_row), titles_from_data=True)
+        versine_chart.set_categories(Reference(ws, min_col=1, min_row=10, max_row=last_data_row))
         versine_chart.height = 8
         versine_chart.width = 16
-        ws.add_chart(versine_chart, "K12")
+        ws.add_chart(versine_chart, "Q12")
         throw_chart = LineChart()
         throw_chart.title = "ระยะดัด"
         throw_chart.y_axis.title = "ระยะดัด (มม.)"
         throw_chart.x_axis.title = "หมุดที่"
-        throw_chart.add_data(Reference(ws, min_col=7, min_row=1, max_row=len(export) + 1), titles_from_data=True)
-        throw_chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=len(export) + 1))
+        throw_chart.add_data(Reference(ws, min_col=7, min_row=9, max_row=last_data_row), titles_from_data=True)
+        throw_chart.set_categories(Reference(ws, min_col=1, min_row=10, max_row=last_data_row))
         throw_chart.height = 8
         throw_chart.width = 16
-        ws.add_chart(throw_chart, "K28")
+        ws.add_chart(throw_chart, "Q28")
     st.download_button(
         "ดาวน์โหลดตาราง String Lining พร้อมสูตรและกราฟ",
         output.getvalue(),
@@ -361,21 +430,92 @@ elif page == "string_lining":
         "กรอกเวอร์ไซน์เดิมและเวอร์ไซน์แก้ไข ระบบคำนวณผลต่างสะสม ครึ่งระยะดัด ระยะดัด และกราฟรูปโค้ง",
     )
 
+    with st.expander("ข้อมูลหัวแบบฟอร์ม", expanded=True):
+        f1, f2, f3, f4 = st.columns(4)
+        curve_no = f1.text_input("โค้งเลขที่", "40267")
+        km_start = f2.text_input("กม. เริ่มต้น", "754+185")
+        km_end = f3.text_input("กม. ปลายโค้ง", "754+320")
+        direction = f4.selectbox("ทิศทางโค้ง", ["โค้งขวา", "โค้งซ้าย"])
+        f1, f2, f3 = st.columns(3)
+        inspector_section = f1.text_input("ตอนนายตรวจทาง", "ทุ่งสง")
+        division = f2.text_input("แขวงบำรุงทาง", "ทุ่งสง")
+        office = f3.text_input("กองบำรุงทางเขต", "ทุ่งสง")
+        f1, f2, f3, f4 = st.columns(4)
+        speed_form = f1.number_input("ความเร็วขบวนรถ (กม./ชม.)", 10.0, 250.0, 80.0, 5.0)
+        radius = f2.number_input("รัศมีเป้าหมาย R (ม.)", 50.0, 10000.0, 800.0, 10.0)
+        cant_form = f3.number_input("ค่ายกโค้ง (มม.)", 0.0, 180.0, 50.0, 5.0)
+        curve_length_form = f4.number_input("ความยาวโค้งรวม (ม.)", 1.0, 10000.0, 135.0, 5.0)
+        f1, f2, f3, f4 = st.columns(4)
+        surveyor = f1.text_input("ผู้สำรวจ", "นตท.")
+        survey_date = f2.date_input("วันที่สำรวจ", value=date.today())
+        calculator_name = f3.text_input("ผู้คำนวณ", "วศธ.ทส.")
+        calculation_date = f4.date_input("วันที่คำนวณ", value=date.today())
+        f1, f2 = st.columns(2)
+        centre_setter = f1.text_input("ผู้ให้ ศก.หมุด", "")
+        lining_operator = f2.text_input("ผู้ดัดราง", "")
+
+    metadata = {
+        "curve_no": curve_no,
+        "km_start": km_start,
+        "km_end": km_end,
+        "direction": direction,
+        "inspector_section": inspector_section,
+        "division": division,
+        "office": office,
+        "speed": speed_form,
+        "radius": radius,
+        "cant": cant_form,
+        "curve_length": curve_length_form,
+        "surveyor": surveyor,
+        "survey_date": survey_date.isoformat(),
+        "calculator": calculator_name,
+        "calculation_date": calculation_date.isoformat(),
+        "centre_setter": centre_setter,
+        "lining_operator": lining_operator,
+    }
+
+    st.markdown("### ผังองค์ประกอบโค้ง")
+    string_lining_curve_diagram(direction)
+    st.caption("TS: Tangent to Spiral · SC: Spiral to Circular · CS: Circular to Spiral · ST: Spiral to Tangent")
+
     sample_original = [6, 1, 5, 10, 7, 0, 2, 18, 14, 17, 17, 15, 11, 16, 16, 16, 16, 15, 13, 11, 6, 9, 8, 7, 4, 3, 0, 0, 0, 0, 5]
     sample_revised = [0, 1, 3, 6, 8, 9, 10, 12, 14, 15, 16, 16, 16, 16, 15, 14, 15, 15, 13, 13, 11, 8, 7, 5, 4, 3, 2, 1, 0, 0, 0]
     sample_notes = [""] * len(sample_original)
     for pin, note in {1: "TS", 10: "SC", 18: "CS", 28: "ST"}.items():
         sample_notes[pin - 1] = note
 
+    extra_defaults = {
+        "ค่าขยายทาง (มม.)": 0.0,
+        "ค่ายกโค้ง (มม.)": 0.0,
+        "เวอร์ไซน์มาตรฐาน (มม.)": 0.0,
+        "สทล. จุดที่": "",
+        "ศก.ทาง": "",
+        "รางนอก": "",
+    }
+
+    def complete_string_lining_columns(frame: pd.DataFrame) -> pd.DataFrame:
+        completed = frame.copy()
+        for column, default in extra_defaults.items():
+            if column not in completed:
+                completed[column] = default
+        columns = [
+            "หมุดที่", "เวอร์ไซน์เดิม (มม.)", "เวอร์ไซน์ใหม่ (มม.)",
+            "ค่าขยายทาง (มม.)", "ค่ายกโค้ง (มม.)", "เวอร์ไซน์มาตรฐาน (มม.)",
+            "สทล. จุดที่", "ศก.ทาง", "รางนอก", "หมายเหตุ",
+        ]
+        return completed[columns]
+
     if "string_lining_input" not in st.session_state:
-        st.session_state.string_lining_input = pd.DataFrame(
+        st.session_state.string_lining_input = complete_string_lining_columns(pd.DataFrame(
             {
                 "หมุดที่": range(1, len(sample_original) + 1),
                 "เวอร์ไซน์เดิม (มม.)": sample_original,
                 "เวอร์ไซน์ใหม่ (มม.)": sample_revised,
                 "หมายเหตุ": sample_notes,
             }
-        )
+        ))
+    else:
+        st.session_state.string_lining_input = complete_string_lining_columns(st.session_state.string_lining_input)
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -383,9 +523,9 @@ elif page == "string_lining":
     with c2:
         pin_spacing = st.number_input("ระยะหมุด/ครึ่งคอร์ด (ม.)", .5, 20.0, 5.0, .5)
     with c3:
-        radius = st.number_input("รัศมีเป้าหมาย R (ม.)", 50.0, 10000.0, 800.0, 10.0)
-    with c4:
         baseline = st.number_input("ระยะฐานราง-ศก. (มม.)", 0.0, 5000.0, 500.0, 10.0)
+    with c4:
+        target_throw = st.select_slider("เป้าหมายระยะดัดสูงสุด (มม.)", options=[60, 70, 80, 90, 100, 110, 120], value=120)
 
     theoretical_max = chord_length**2 * 1000 / (8 * radius)
     st.caption(f"เวอร์ไซน์ทฤษฎีในโค้งกลม V = C²/(8R) = {theoretical_max:.2f} มม. · ตอกหมุดตามแนวรางทุกครึ่งคอร์ด = {pin_spacing:g} ม.")
@@ -413,15 +553,15 @@ elif page == "string_lining":
             generated = theoretical_versine_profile(before, entry, circular, exit_count, after, theoretical_max)
             current = st.session_state.string_lining_input
             old = current["เวอร์ไซน์เดิม (มม.)"].tolist() if len(current) == len(generated) else [0.0] * len(generated)
-            st.session_state.string_lining_input = pd.DataFrame(
+            st.session_state.string_lining_input = complete_string_lining_columns(pd.DataFrame(
                 {"หมุดที่": range(1, len(generated) + 1), "เวอร์ไซน์เดิม (มม.)": old, "เวอร์ไซน์ใหม่ (มม.)": generated, "หมายเหตุ": [""] * len(generated)}
-            )
+            ))
             st.session_state.pop("string_lining_editor", None)
             st.rerun()
         if b2.button("เรียกตัวอย่างจาก Excel ทส.1", use_container_width=True):
-            st.session_state.string_lining_input = pd.DataFrame(
+            st.session_state.string_lining_input = complete_string_lining_columns(pd.DataFrame(
                 {"หมุดที่": range(1, len(sample_original) + 1), "เวอร์ไซน์เดิม (มม.)": sample_original, "เวอร์ไซน์ใหม่ (มม.)": sample_revised, "หมายเหตุ": sample_notes}
-            )
+            ))
             st.session_state.pop("string_lining_editor", None)
             st.rerun()
 
@@ -436,6 +576,12 @@ elif page == "string_lining":
             "หมุดที่": st.column_config.NumberColumn("หมุดที่", min_value=1, step=1, format="%d"),
             "เวอร์ไซน์เดิม (มม.)": st.column_config.NumberColumn("เวอร์ไซน์เดิม (มม.)", step=1.0, format="%.1f"),
             "เวอร์ไซน์ใหม่ (มม.)": st.column_config.NumberColumn("เวอร์ไซน์ใหม่ (มม.)", step=1.0, format="%.1f"),
+            "ค่าขยายทาง (มม.)": st.column_config.NumberColumn("ค่าขยายทาง (มม.)", step=1.0, format="%.1f"),
+            "ค่ายกโค้ง (มม.)": st.column_config.NumberColumn("ค่ายกโค้ง (มม.)", step=1.0, format="%.1f"),
+            "เวอร์ไซน์มาตรฐาน (มม.)": st.column_config.NumberColumn("เวอร์ไซน์มาตรฐาน (มม.)", step=1.0, format="%.1f"),
+            "สทล. จุดที่": st.column_config.TextColumn("สทล. จุดที่"),
+            "ศก.ทาง": st.column_config.TextColumn("ศก.ทาง"),
+            "รางนอก": st.column_config.TextColumn("รางนอก"),
             "หมายเหตุ": st.column_config.TextColumn("หมายเหตุ"),
         },
         key="string_lining_editor",
@@ -446,10 +592,47 @@ elif page == "string_lining":
     working = working.dropna(subset=["เวอร์ไซน์เดิม (มม.)", "เวอร์ไซน์ใหม่ (มม.)"]).reset_index(drop=True)
     working["หมุดที่"] = range(1, len(working) + 1)
     working["หมายเหตุ"] = working["หมายเหตุ"].fillna("")
+    for column in ["ค่าขยายทาง (มม.)", "ค่ายกโค้ง (มม.)", "เวอร์ไซน์มาตรฐาน (มม.)"]:
+        working[column] = pd.to_numeric(working[column], errors="coerce").fillna(0.0)
+    for column in ["สทล. จุดที่", "ศก.ทาง", "รางนอก"]:
+        working[column] = working[column].fillna("")
     st.session_state.string_lining_input = working
     if working.empty:
         st.warning("กรุณาเพิ่มข้อมูลเวอร์ไซน์อย่างน้อย 1 หมุด")
         st.stop()
+
+    action_left, action_right = st.columns([2, 1])
+    if action_left.button("ปรับปรุง Vใหม่ ให้ผ่านเงื่อนไข", type="primary", use_container_width=True):
+        try:
+            improved = improve_string_lining_versines(
+                working["เวอร์ไซน์เดิม (มม.)"].tolist(),
+                working["เวอร์ไซน์ใหม่ (มม.)"].tolist(),
+                target_throw,
+            )
+            st.session_state.string_lining_previous_revised = working["เวอร์ไซน์ใหม่ (มม.)"].tolist()
+            working["เวอร์ไซน์ใหม่ (มม.)"] = improved["revised_versines"]
+            st.session_state.string_lining_input = working
+            target_message = (
+                "อยู่ในเป้าหมาย" if improved["maximum_throw_mm"] <= target_throw
+                else "ยังเกินเป้าหมาย กรุณาตรวจข้อจำกัดหน้างานและปรับด้วยวิศวกร"
+            )
+            st.session_state.string_lining_optimization_message = (
+                f'ปรับ Vใหม่แล้ว: ปิดผลรวมและครึ่งระยะดัด ระยะดัดสูงสุด {improved["maximum_throw_mm"]:.1f} มม. - {target_message}'
+            )
+            st.session_state.pop("string_lining_editor", None)
+            st.rerun()
+        except ValueError as error:
+            st.error(str(error))
+    if action_right.button("ย้อนกลับ Vใหม่", use_container_width=True, disabled="string_lining_previous_revised" not in st.session_state):
+        previous = st.session_state.string_lining_previous_revised
+        if len(previous) == len(working):
+            working["เวอร์ไซน์ใหม่ (มม.)"] = previous
+            st.session_state.string_lining_input = working
+            st.session_state.pop("string_lining_previous_revised", None)
+            st.session_state.pop("string_lining_editor", None)
+            st.rerun()
+    if "string_lining_optimization_message" in st.session_state:
+        st.success(st.session_state.pop("string_lining_optimization_message"))
 
     result = string_lining_calculation(
         working["เวอร์ไซน์เดิม (มม.)"].tolist(),
@@ -466,6 +649,12 @@ elif page == "string_lining":
             "ครึ่งดัด (มม.)": [row["half_throw_mm"] for row in result["rows"]],
             "ระยะดัด (มม.)": [row["throw_mm"] for row in result["rows"]],
             "ราง-ศก. (มม.)": [row["rail_to_centre_mm"] for row in result["rows"]],
+            "ค่าขยายทาง (มม.)": working["ค่าขยายทาง (มม.)"],
+            "ค่ายกโค้ง (มม.)": working["ค่ายกโค้ง (มม.)"],
+            "เวอร์ไซน์มาตรฐาน (มม.)": working["เวอร์ไซน์มาตรฐาน (มม.)"],
+            "สทล. จุดที่": working["สทล. จุดที่"],
+            "ศก.ทาง": working["ศก.ทาง"],
+            "รางนอก": working["รางนอก"],
             "หมายเหตุ": working["หมายเหตุ"],
         }
     )
@@ -505,11 +694,11 @@ elif page == "string_lining":
         result_status("ครึ่งระยะดัดปลายโค้ง", result["throw_closed"], "ต้องเริ่มและจบด้วยศูนย์")
     with q2:
         result_status("เวอร์ไซน์ปลายทั้งสอง", result["end_versines_zero"], "ทางตรงควรเป็นศูนย์")
-        result_status("ระยะดัดเป้าหมาย", result["throw_within_working_range"], "Excel แนะนำให้อยู่ในช่วงทำงานไม่เกิน 60-120 มม.")
+        result_status("ระยะดัดเป้าหมาย", result["max_abs_throw_mm"] <= target_throw, f"กำหนดไม่เกิน {target_throw} มม. (เลือกได้ในช่วง 60-120 มม.)")
         result_status("ระยะดัดสูงสุดตามคู่มือ", result["throw_within_document_limit"], "ควรไม่เกิน 20 ซม. หากทำได้")
 
     st.markdown('<div class="formula">Dᵢ = Vเดิม−Vใหม่ · Eᵢ = Eᵢ₋₁+Dᵢ · Fᵢ = Fᵢ₋₁+Eᵢ₋₁ · ระยะดัด = 2Fᵢ</div>', unsafe_allow_html=True)
-    string_lining_excel_download(working, result_df, baseline)
+    string_lining_excel_download(working, result_df, baseline, metadata)
 
 
 elif page == "widening":
