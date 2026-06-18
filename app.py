@@ -5,12 +5,16 @@ from math import ceil
 
 import pandas as pd
 import streamlit as st
+from openpyxl.chart import LineChart, Reference
+from openpyxl.styles import Alignment, Font, PatternFill
 
 from calculators import (
     RAIL_PROPERTIES,
     cant_calculation,
     drainage_design,
     sleeper_track_analysis,
+    string_lining_calculation,
+    theoretical_versine_profile,
     track_widening,
     transition_curve,
     turnout_geometry,
@@ -69,6 +73,7 @@ PAGES = {
     "วิเคราะห์ราง–หมอน–หินโรยทาง": "sleeper",
     "เรขาคณิตประแจ": "turnout_geometry",
     "โค้งต่อและโค้งกลม": "transition",
+    "โค้งเส้นเชือก (String Lining)": "string_lining",
     "การขยายขนาดทาง": "widening",
 }
 
@@ -102,6 +107,76 @@ def excel_download(title: str, inputs: dict, results: dict) -> None:
     )
 
 
+def string_lining_excel_download(input_df: pd.DataFrame, result_df: pd.DataFrame, baseline: float) -> None:
+    output = BytesIO()
+    export = pd.DataFrame(
+        {
+            "หมุดที่": result_df["หมุดที่"],
+            "เวอร์ไซน์เดิม (มม.)": result_df["เวอร์ไซน์เดิม (มม.)"],
+            "เวอร์ไซน์ใหม่ (มม.)": result_df["เวอร์ไซน์ใหม่ (มม.)"],
+            "ผลต่าง (มม.)": result_df["ผลต่าง (มม.)"],
+            "รวมต่าง (มม.)": result_df["รวมต่าง (มม.)"],
+            "ครึ่งดัด (มม.)": result_df["ครึ่งดัด (มม.)"],
+            "ระยะดัด (มม.)": result_df["ระยะดัด (มม.)"],
+            "ราง-ศก. (มม.)": result_df["ราง-ศก. (มม.)"],
+            "หมายเหตุ": input_df["หมายเหตุ"],
+        }
+    )
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        export.to_excel(writer, "String Lining", index=False)
+        ws = writer.book["String Lining"]
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = f"A1:I{len(export) + 1}"
+        ws["K1"] = "ข้อมูลควบคุม"
+        ws["K2"] = "ระยะฐานราง-ศก. (มม.)"
+        ws["L2"] = baseline
+        ws["K4"] = "สูตรจาก Excel ต้นฉบับ"
+        ws["K5"] = "D = B-C"
+        ws["K6"] = "E(i) = E(i-1)+D(i)"
+        ws["K7"] = "F(i) = F(i-1)+E(i-1)"
+        ws["K8"] = "G = 2F"
+        ws["K9"] = "H = Baseline-G"
+        for row in range(2, len(export) + 2):
+            ws[f"D{row}"] = f"=B{row}-C{row}"
+            ws[f"E{row}"] = f"=D{row}" if row == 2 else f"=E{row-1}+D{row}"
+            ws[f"F{row}"] = "=0" if row == 2 else f"=F{row-1}+E{row-1}"
+            ws[f"G{row}"] = f"=2*F{row}"
+            ws[f"H{row}"] = f"=$L$2-G{row}"
+        header_fill = PatternFill("solid", fgColor="0B2341")
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = Font(color="FFFFFF", bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        widths = [10, 20, 20, 16, 16, 16, 16, 16, 30]
+        for col, width in zip("ABCDEFGHI", widths):
+            ws.column_dimensions[col].width = width
+        versine_chart = LineChart()
+        versine_chart.title = "เวอร์ไซน์เดิมและเวอร์ไซน์ใหม่"
+        versine_chart.y_axis.title = "เวอร์ไซน์ (มม.)"
+        versine_chart.x_axis.title = "หมุดที่"
+        versine_chart.add_data(Reference(ws, min_col=2, max_col=3, min_row=1, max_row=len(export) + 1), titles_from_data=True)
+        versine_chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=len(export) + 1))
+        versine_chart.height = 8
+        versine_chart.width = 16
+        ws.add_chart(versine_chart, "K12")
+        throw_chart = LineChart()
+        throw_chart.title = "ระยะดัด"
+        throw_chart.y_axis.title = "ระยะดัด (มม.)"
+        throw_chart.x_axis.title = "หมุดที่"
+        throw_chart.add_data(Reference(ws, min_col=7, min_row=1, max_row=len(export) + 1), titles_from_data=True)
+        throw_chart.set_categories(Reference(ws, min_col=1, min_row=2, max_row=len(export) + 1))
+        throw_chart.height = 8
+        throw_chart.width = 16
+        ws.add_chart(throw_chart, "K28")
+    st.download_button(
+        "ดาวน์โหลดตาราง String Lining พร้อมสูตรและกราฟ",
+        output.getvalue(),
+        file_name="string_lining_calculation.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
+
 with st.sidebar:
     st.markdown("## SRT · CALC")
     st.caption("เครื่องมือคำนวณงานทางรถไฟ")
@@ -117,11 +192,12 @@ if page == "overview":
     heading("เครื่องมือคำนวณงานทางรถไฟ", "เลือกหมวดจากแถบด้านซ้าย กรอกข้อมูล และส่งออกผลเป็น Excel ได้ทันที")
     c1, c2, c3 = st.columns(3)
     c1.metric("ชีตต้นฉบับ", "20", "รวมชีตซ่อน")
-    c2.metric("เครื่องมือพร้อมใช้", "7", "สูตรหลักจาก Excel")
+    c2.metric("เครื่องมือพร้อมใช้", "8", "สูตรหลักจาก Excel")
     c3.metric("ระบบหน่วย", "SI", "พร้อมหน่วยกำกับ")
     st.markdown("### หมวดที่พร้อมคำนวณ")
     ready = [
         ("Alignment", "ค่ายกโค้ง ความเร็วสูงสุด–ต่ำสุด โค้งต่อและโค้งกลม"),
+        ("String Lining", "ตารางเวอร์ไซน์ ผลต่างสะสม ครึ่งระยะดัด ระยะดัด และกราฟสรุป"),
         ("Turnout", "ความเร็วผ่านประแจ เรขาคณิตประแจ และมุมตะเฆ้"),
         ("Track Structure", "แรงเค้นราง แรงถ่ายทอดสู่หมอน แรงกดหินโรยทางและพื้นทาง"),
         ("Drainage", "Rational Formula + Manning สำหรับรางรูปสี่เหลี่ยมคางหมู"),
@@ -277,6 +353,163 @@ elif page == "transition":
         st.dataframe(chainages.style.format({"Chainage (m)": "{:,.3f}"}), hide_index=True, use_container_width=True)
         st.markdown('<div class="formula">Ls = 0.01VCa · Shift = Ls²/(24R)</div>', unsafe_allow_html=True)
         excel_download("transition_curve", {"delta": delta, "R": radius, "V": speed, "PI": pi_ch}, result)
+
+
+elif page == "string_lining":
+    heading(
+        "การคำนวณโค้งเส้นเชือก (String Lining)",
+        "กรอกเวอร์ไซน์เดิมและเวอร์ไซน์แก้ไข ระบบคำนวณผลต่างสะสม ครึ่งระยะดัด ระยะดัด และกราฟรูปโค้ง",
+    )
+
+    sample_original = [6, 1, 5, 10, 7, 0, 2, 18, 14, 17, 17, 15, 11, 16, 16, 16, 16, 15, 13, 11, 6, 9, 8, 7, 4, 3, 0, 0, 0, 0, 5]
+    sample_revised = [0, 1, 3, 6, 8, 9, 10, 12, 14, 15, 16, 16, 16, 16, 15, 14, 15, 15, 13, 13, 11, 8, 7, 5, 4, 3, 2, 1, 0, 0, 0]
+    sample_notes = [""] * len(sample_original)
+    for pin, note in {1: "TS", 10: "SC", 18: "CS", 28: "ST"}.items():
+        sample_notes[pin - 1] = note
+
+    if "string_lining_input" not in st.session_state:
+        st.session_state.string_lining_input = pd.DataFrame(
+            {
+                "หมุดที่": range(1, len(sample_original) + 1),
+                "เวอร์ไซน์เดิม (มม.)": sample_original,
+                "เวอร์ไซน์ใหม่ (มม.)": sample_revised,
+                "หมายเหตุ": sample_notes,
+            }
+        )
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        chord_length = st.number_input("ความยาวคอร์ด C (ม.)", 1.0, 40.0, 10.0, 1.0)
+    with c2:
+        pin_spacing = st.number_input("ระยะหมุด/ครึ่งคอร์ด (ม.)", .5, 20.0, 5.0, .5)
+    with c3:
+        radius = st.number_input("รัศมีเป้าหมาย R (ม.)", 50.0, 10000.0, 800.0, 10.0)
+    with c4:
+        baseline = st.number_input("ระยะฐานราง-ศก. (มม.)", 0.0, 5000.0, 500.0, 10.0)
+
+    theoretical_max = chord_length**2 * 1000 / (8 * radius)
+    st.caption(f"เวอร์ไซน์ทฤษฎีในโค้งกลม V = C²/(8R) = {theoretical_max:.2f} มม. · ตอกหมุดตามแนวรางทุกครึ่งคอร์ด = {pin_spacing:g} ม.")
+    with st.expander("หลักเกณฑ์จากคู่มือการดัดแนวโค้ง"):
+        st.markdown(
+            """
+- ใช้เชือกยาวเท่ากันตลอดแนว และวัดเวอร์ไซน์ที่กึ่งกลางคอร์ด
+- หมุดแรกและหมุดสุดท้ายควรอยู่บนทางตรง โดยเวอร์ไซน์แก้ไขเป็นศูนย์
+- เวอร์ไซน์ในโค้งต่อควรเพิ่มหรือลดแบบ Arithmetic Progression และในโค้งกลมควรสม่ำเสมอ
+- ผลรวมเวอร์ไซน์เดิมต้องเท่ากับผลรวมเวอร์ไซน์ใหม่ รวมต่างและครึ่งระยะดัดที่ปลายต้องกลับเป็นศูนย์
+- ค่าระยะดัดสูงสุดควรไม่เกิน 20 ซม. หากทำได้ และต้องตรวจสิ่งกีดขวาง/ระยะปลอดภัยก่อนดัดจริง
+"""
+        )
+
+    with st.expander("สร้างเวอร์ไซน์ใหม่เบื้องต้นแบบ Arithmetic Progression"):
+        p1, p2, p3, p4, p5 = st.columns(5)
+        before = p1.number_input("ทางตรงก่อน TS (หมุด)", 0, 50, 2)
+        entry = p2.number_input("โค้งต่อด้านต้น (ช่วง)", 1, 100, 9)
+        circular = p3.number_input("โค้งกลม (หมุด)", 0, 200, 9)
+        exit_count = p4.number_input("โค้งต่อด้านปลาย (ช่วง)", 1, 100, 9)
+        after = p5.number_input("ทางตรงหลัง ST (หมุด)", 0, 50, 2)
+        st.caption("ค่าที่สร้างเป็นจุดเริ่มต้นสำหรับปรับแก้ ต้องตรวจผลรวมและการปิดค่าท้ายตารางอีกครั้ง")
+        b1, b2 = st.columns(2)
+        if b1.button("สร้างโปรไฟล์เวอร์ไซน์ใหม่", use_container_width=True):
+            generated = theoretical_versine_profile(before, entry, circular, exit_count, after, theoretical_max)
+            current = st.session_state.string_lining_input
+            old = current["เวอร์ไซน์เดิม (มม.)"].tolist() if len(current) == len(generated) else [0.0] * len(generated)
+            st.session_state.string_lining_input = pd.DataFrame(
+                {"หมุดที่": range(1, len(generated) + 1), "เวอร์ไซน์เดิม (มม.)": old, "เวอร์ไซน์ใหม่ (มม.)": generated, "หมายเหตุ": [""] * len(generated)}
+            )
+            st.session_state.pop("string_lining_editor", None)
+            st.rerun()
+        if b2.button("เรียกตัวอย่างจาก Excel ทส.1", use_container_width=True):
+            st.session_state.string_lining_input = pd.DataFrame(
+                {"หมุดที่": range(1, len(sample_original) + 1), "เวอร์ไซน์เดิม (มม.)": sample_original, "เวอร์ไซน์ใหม่ (มม.)": sample_revised, "หมายเหตุ": sample_notes}
+            )
+            st.session_state.pop("string_lining_editor", None)
+            st.rerun()
+
+    st.markdown("### 1. ตารางกรอกข้อมูล")
+    st.caption("แก้ไขเฉพาะเวอร์ไซน์เดิม เวอร์ไซน์ใหม่ และหมายเหตุ สามารถเพิ่มหรือลบแถวได้")
+    edited = st.data_editor(
+        st.session_state.string_lining_input,
+        num_rows="dynamic",
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "หมุดที่": st.column_config.NumberColumn("หมุดที่", min_value=1, step=1, format="%d"),
+            "เวอร์ไซน์เดิม (มม.)": st.column_config.NumberColumn("เวอร์ไซน์เดิม (มม.)", step=1.0, format="%.1f"),
+            "เวอร์ไซน์ใหม่ (มม.)": st.column_config.NumberColumn("เวอร์ไซน์ใหม่ (มม.)", step=1.0, format="%.1f"),
+            "หมายเหตุ": st.column_config.TextColumn("หมายเหตุ"),
+        },
+        key="string_lining_editor",
+    )
+    working = edited.copy()
+    working["เวอร์ไซน์เดิม (มม.)"] = pd.to_numeric(working["เวอร์ไซน์เดิม (มม.)"], errors="coerce")
+    working["เวอร์ไซน์ใหม่ (มม.)"] = pd.to_numeric(working["เวอร์ไซน์ใหม่ (มม.)"], errors="coerce")
+    working = working.dropna(subset=["เวอร์ไซน์เดิม (มม.)", "เวอร์ไซน์ใหม่ (มม.)"]).reset_index(drop=True)
+    working["หมุดที่"] = range(1, len(working) + 1)
+    working["หมายเหตุ"] = working["หมายเหตุ"].fillna("")
+    st.session_state.string_lining_input = working
+    if working.empty:
+        st.warning("กรุณาเพิ่มข้อมูลเวอร์ไซน์อย่างน้อย 1 หมุด")
+        st.stop()
+
+    result = string_lining_calculation(
+        working["เวอร์ไซน์เดิม (มม.)"].tolist(),
+        working["เวอร์ไซน์ใหม่ (มม.)"].tolist(),
+        baseline,
+    )
+    result_df = pd.DataFrame(
+        {
+            "หมุดที่": [row["station"] for row in result["rows"]],
+            "เวอร์ไซน์เดิม (มม.)": [row["original_versine_mm"] for row in result["rows"]],
+            "เวอร์ไซน์ใหม่ (มม.)": [row["revised_versine_mm"] for row in result["rows"]],
+            "ผลต่าง (มม.)": [row["difference_mm"] for row in result["rows"]],
+            "รวมต่าง (มม.)": [row["cumulative_difference_mm"] for row in result["rows"]],
+            "ครึ่งดัด (มม.)": [row["half_throw_mm"] for row in result["rows"]],
+            "ระยะดัด (มม.)": [row["throw_mm"] for row in result["rows"]],
+            "ราง-ศก. (มม.)": [row["rail_to_centre_mm"] for row in result["rows"]],
+            "หมายเหตุ": working["หมายเหตุ"],
+        }
+    )
+
+    st.markdown("### 2. ผลการคำนวณ")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Σ เวอร์ไซน์เดิม", f'{result["sum_original_mm"]:.0f} มม.')
+    k2.metric("Σ เวอร์ไซน์ใหม่", f'{result["sum_revised_mm"]:.0f} มม.', f'{result["sum_difference_mm"]:+.0f} มม.')
+    k3.metric("ระยะดัดสูงสุด", f'{result["max_abs_throw_mm"]:.0f} มม.')
+    k4.metric("ปิดครึ่งดัดปลาย", f'{result["final_half_throw_mm"]:+.0f} มม.')
+    st.dataframe(
+        result_df.style.format({col: "{:.1f}" for col in result_df.columns if "(มม.)" in col}),
+        hide_index=True,
+        use_container_width=True,
+        height=440,
+    )
+
+    st.markdown("### 3. กราฟสรุป")
+    graph_left, graph_right = st.columns(2, gap="large")
+    with graph_left:
+        st.caption("รูปโค้งจากเวอร์ไซน์เดิมและเวอร์ไซน์ใหม่")
+        st.line_chart(
+            result_df[["หมุดที่", "เวอร์ไซน์เดิม (มม.)", "เวอร์ไซน์ใหม่ (มม.)"]],
+            x="หมุดที่",
+            y=["เวอร์ไซน์เดิม (มม.)", "เวอร์ไซน์ใหม่ (มม.)"],
+            height=320,
+        )
+    with graph_right:
+        st.caption("ระยะดัดที่แต่ละหมุด: ค่าบวก/ลบแสดงทิศทางการดัดคนละด้าน")
+        st.line_chart(result_df[["หมุดที่", "ระยะดัด (มม.)"]], x="หมุดที่", y="ระยะดัด (มม.)", height=320)
+
+    st.markdown("### 4. ตรวจสอบเงื่อนไข")
+    q1, q2 = st.columns(2)
+    with q1:
+        result_status("ผลรวมเวอร์ไซน์", result["sum_balanced"], "ΣVเดิม ต้องเท่ากับ ΣVใหม่")
+        result_status("รวมต่างหมุดสุดท้าย", result["cumulative_closed"], "ต้องเท่ากับศูนย์")
+        result_status("ครึ่งระยะดัดปลายโค้ง", result["throw_closed"], "ต้องเริ่มและจบด้วยศูนย์")
+    with q2:
+        result_status("เวอร์ไซน์ปลายทั้งสอง", result["end_versines_zero"], "ทางตรงควรเป็นศูนย์")
+        result_status("ระยะดัดเป้าหมาย", result["throw_within_working_range"], "Excel แนะนำให้อยู่ในช่วงทำงานไม่เกิน 60-120 มม.")
+        result_status("ระยะดัดสูงสุดตามคู่มือ", result["throw_within_document_limit"], "ควรไม่เกิน 20 ซม. หากทำได้")
+
+    st.markdown('<div class="formula">Dᵢ = Vเดิม−Vใหม่ · Eᵢ = Eᵢ₋₁+Dᵢ · Fᵢ = Fᵢ₋₁+Eᵢ₋₁ · ระยะดัด = 2Fᵢ</div>', unsafe_allow_html=True)
+    string_lining_excel_download(working, result_df, baseline)
 
 
 elif page == "widening":
