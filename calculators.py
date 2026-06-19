@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from math import atan, cos, exp, floor, pi, radians, sin, sqrt, tan
 
-import numpy as np
+E_NUM = exp(1.0)
 
 
 RAIL_PROPERTIES = {
@@ -20,164 +20,6 @@ RAIL_PROPERTIES = {
     "54E1": {"I": 2338.00, "Z": 278.70, "area": 6977.00, "mass": 54.77},
     "60E1": {"I": 3038.00, "Z": 333.60, "area": 7670.00, "mass": 60.21},
 }
-
-
-def string_lining_calculation(
-    original_versines: list[float],
-    revised_versines: list[float],
-    baseline_offset_mm: float = 500,
-) -> dict:
-    """Calculate string-lining throws using the cumulative summation method in the workbook.
-
-    Columns follow the source workbook:
-    difference = original - revised
-    cumulative difference = previous cumulative + difference
-    half throw = previous half throw + previous cumulative difference
-    throw = 2 * half throw
-    rail-to-centre = baseline - throw
-    """
-    if len(original_versines) != len(revised_versines):
-        raise ValueError("Original and revised versine lists must have equal length")
-    if not original_versines:
-        raise ValueError("At least one station is required")
-
-    rows = []
-    previous_cumulative = 0.0
-    previous_half_throw = 0.0
-    for index, (original, revised) in enumerate(zip(original_versines, revised_versines), start=1):
-        original = float(original)
-        revised = float(revised)
-        difference = original - revised
-        cumulative = previous_cumulative + difference
-        half_throw = previous_half_throw + previous_cumulative
-        throw = 2 * half_throw
-        rows.append(
-            {
-                "station": index,
-                "original_versine_mm": original,
-                "revised_versine_mm": revised,
-                "difference_mm": difference,
-                "cumulative_difference_mm": cumulative,
-                "half_throw_mm": half_throw,
-                "throw_mm": throw,
-                "rail_to_centre_mm": baseline_offset_mm - throw,
-            }
-        )
-        previous_cumulative = cumulative
-        previous_half_throw = half_throw
-
-    sum_original = sum(float(v) for v in original_versines)
-    sum_revised = sum(float(v) for v in revised_versines)
-    max_abs_throw = max(abs(row["throw_mm"]) for row in rows)
-    return {
-        "rows": rows,
-        "sum_original_mm": sum_original,
-        "sum_revised_mm": sum_revised,
-        "sum_difference_mm": sum_original - sum_revised,
-        "final_cumulative_difference_mm": rows[-1]["cumulative_difference_mm"],
-        "final_half_throw_mm": rows[-1]["half_throw_mm"],
-        "max_abs_throw_mm": max_abs_throw,
-        "sum_balanced": abs(sum_original - sum_revised) < 1e-9,
-        "cumulative_closed": abs(rows[-1]["cumulative_difference_mm"]) < 1e-9,
-        "throw_closed": abs(rows[-1]["half_throw_mm"]) < 1e-9,
-        "end_versines_zero": abs(float(revised_versines[0])) < 1e-9
-        and abs(float(revised_versines[-1])) < 1e-9,
-        "throw_within_working_range": max_abs_throw <= 120,
-        "throw_within_document_limit": max_abs_throw <= 200,
-    }
-
-
-def theoretical_versine_profile(
-    straight_before_pins: int,
-    entry_transition_pins: int,
-    circular_pins: int,
-    exit_transition_pins: int,
-    straight_after_pins: int,
-    maximum_versine_mm: float,
-) -> list[float]:
-    """Create a rounded arithmetic-progression profile as an editable starting point."""
-    profile = [0.0] * max(straight_before_pins, 0)
-    if entry_transition_pins > 0:
-        profile.extend(
-            round(maximum_versine_mm * i / entry_transition_pins)
-            for i in range(1, entry_transition_pins + 1)
-        )
-    profile.extend([round(maximum_versine_mm)] * max(circular_pins, 0))
-    if exit_transition_pins > 0:
-        profile.extend(
-            round(maximum_versine_mm * (exit_transition_pins - i) / exit_transition_pins)
-            for i in range(1, exit_transition_pins + 1)
-        )
-    profile.extend([0.0] * max(straight_after_pins, 0))
-    return [float(v) for v in profile]
-
-
-def improve_string_lining_versines(
-    original_versines: list[float],
-    current_revised_versines: list[float],
-    maximum_throw_mm: float = 120,
-) -> dict:
-    """Improve revised versines while enforcing the two string-lining closure equations.
-
-    The solution is the smallest least-squares correction to the current revised
-    profile. If its throw exceeds the selected working limit, the profile is
-    progressively blended toward the measured versines and projected again.
-    End versines are fixed at zero throughout.
-    """
-    old = np.asarray(original_versines, dtype=float)
-    current = np.asarray(current_revised_versines, dtype=float)
-    if old.shape != current.shape or old.ndim != 1:
-        raise ValueError("Original and revised versines must be equal one-dimensional lists")
-    if len(old) < 4:
-        raise ValueError("At least four stations are required for automatic improvement")
-
-    n = len(old)
-    weights = np.arange(n - 1, -1, -1, dtype=float)
-    interior = np.arange(1, n - 1)
-    a = np.vstack([np.ones(len(interior)), weights[interior]])
-    b = np.array([old.sum(), np.dot(weights, old)], dtype=float)
-    gram_inverse = np.linalg.pinv(a @ a.T)
-
-    def project(base: np.ndarray) -> np.ndarray:
-        candidate = base.copy()
-        candidate[0] = 0.0
-        candidate[-1] = 0.0
-        x = candidate[interior]
-        x = x + a.T @ gram_inverse @ (b - a @ x)
-        candidate[interior] = x
-        return candidate
-
-    # A low-throw closure reference: retain measured versines except for the
-    # two stations next to the ends, which absorb the endpoint corrections.
-    closure_difference = np.zeros(n, dtype=float)
-    closure_difference[0] = old[0]
-    closure_difference[-1] = old[-1]
-    closure_difference[1] = (old[-1] - (n - 2) * old[0]) / (n - 3)
-    closure_difference[-2] = -(old[0] + old[-1]) - closure_difference[1]
-    closure_reference = old - closure_difference
-
-    selected = project(current)
-    blend_used = 0.0
-    selected_result = string_lining_calculation(old.tolist(), selected.tolist())
-    if selected_result["max_abs_throw_mm"] > maximum_throw_mm:
-        for blend in np.linspace(0.01, 1.0, 100):
-            base = (1 - blend) * current + blend * closure_reference
-            candidate = project(base)
-            candidate_result = string_lining_calculation(old.tolist(), candidate.tolist())
-            selected = candidate
-            selected_result = candidate_result
-            blend_used = float(blend)
-            if candidate_result["max_abs_throw_mm"] <= maximum_throw_mm:
-                break
-
-    selected[np.abs(selected) < 1e-10] = 0.0
-    return {
-        "revised_versines": selected.tolist(),
-        "blend_used": blend_used,
-        "maximum_throw_mm": selected_result["max_abs_throw_mm"],
-        "sum_closed": selected_result["sum_balanced"],
-        "moment_closed": selected_result["throw_closed"],
-    }
 
 
 def round_to(value: float, increment: float = 5.0) -> float:
@@ -378,4 +220,78 @@ def track_widening(
         "available_straight_m": available_straight,
         "required_straight_m": required_straight,
         "geometry_ok": available_straight >= required_straight,
+    }
+
+
+def bearing_capacity_factors(friction_deg: float) -> dict:
+    """Vesic/Meyerhof bearing capacity factors for a strip footing."""
+    phi = radians(friction_deg)
+    if friction_deg <= 0:
+        return {"Nc": 5.14, "Nq": 1.0, "Ngamma": 0.0}
+    nq = exp(pi * tan(phi)) * tan(radians(45) + phi / 2) ** 2
+    nc = (nq - 1) / tan(phi)
+    ngamma = 2 * (nq + 1) * tan(phi)
+    return {"Nc": nc, "Nq": nq, "Ngamma": ngamma}
+
+
+def embankment_design(
+    formation_width_m: float,
+    embankment_height_m: float,
+    side_slope_h_per_v: float,
+    fill_unit_weight_knm3: float,
+    subgrade_cohesion_kpa: float,
+    subgrade_friction_deg: float,
+    subgrade_unit_weight_knm3: float,
+    applied_formation_pressure_kpa: float,
+    bearing_width_m: float,
+    factor_of_safety: float = 3.0,
+    embedment_m: float = 0.0,
+) -> dict:
+    """Design a railway embankment cross-section and check the allowable
+    bearing capacity of the subgrade at formation level.
+
+    Geometry follows a symmetrical trapezoidal embankment (1V : m H side
+    slopes). Bearing capacity uses the Terzaghi/Vesic strip-footing form
+    evaluated on the effective loaded width of the track on the formation:
+
+        qu = c*Nc + q*Nq + 0.5*gamma*B*Ngamma
+        qa = qu / FS
+
+    ``applied_formation_pressure_kpa`` is the pressure transmitted to the
+    subgrade by the track structure (formation pressure Pb), which can be
+    taken from :func:`sleeper_track_analysis`.
+    """
+    m = side_slope_h_per_v
+    base_width = formation_width_m + 2 * m * embankment_height_m
+    cross_section_area = (formation_width_m + base_width) / 2 * embankment_height_m
+    fill_volume_per_m = cross_section_area
+    fill_weight_per_m = cross_section_area * fill_unit_weight_knm3
+    slope_length = embankment_height_m * sqrt(1 + m**2)
+
+    factors = bearing_capacity_factors(subgrade_friction_deg)
+    surcharge = subgrade_unit_weight_knm3 * embedment_m
+    qu = (
+        subgrade_cohesion_kpa * factors["Nc"]
+        + surcharge * factors["Nq"]
+        + 0.5 * subgrade_unit_weight_knm3 * bearing_width_m * factors["Ngamma"]
+    )
+    qa = qu / factor_of_safety
+    fos_actual = qu / applied_formation_pressure_kpa if applied_formation_pressure_kpa else float("inf")
+    utilisation = applied_formation_pressure_kpa / qa if qa else float("inf")
+
+    return {
+        "base_width_m": base_width,
+        "cross_section_area_m2": cross_section_area,
+        "fill_volume_per_m_m3": fill_volume_per_m,
+        "fill_weight_per_m_kn": fill_weight_per_m,
+        "slope_length_m": slope_length,
+        "Nc": factors["Nc"],
+        "Nq": factors["Nq"],
+        "Ngamma": factors["Ngamma"],
+        "ultimate_bearing_kpa": qu,
+        "allowable_bearing_kpa": qa,
+        "applied_pressure_kpa": applied_formation_pressure_kpa,
+        "factor_of_safety_actual": fos_actual,
+        "utilisation_ratio": utilisation,
+        "bearing_ok": applied_formation_pressure_kpa <= qa,
     }
